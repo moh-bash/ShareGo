@@ -72,6 +72,7 @@ export class ShareGoEngine {
   /* ----- mutable state; `getSnapshot()` composes the published object ----- */
   private deviceId: string | null = null;
   private deviceName = "This device";
+  private deviceType: DeviceType = "unknown";
   private signalingStatus: SignalingStatus = "idle";
   private signalingUrl = "";
   private devices: DeviceInfo[] = [];
@@ -167,7 +168,6 @@ export class ShareGoEngine {
   };
 
   getSnapshot = (): EngineSnapshot => {
-    if (this.dirty) this.flush();
     return this.snapshot;
   };
 
@@ -190,7 +190,7 @@ export class ShareGoEngine {
       identity: {
         deviceId: this.deviceId,
         deviceName: this.deviceName,
-        deviceType: detectDeviceType(),
+        deviceType: this.deviceType,
       },
       signaling: { status: this.signalingStatus, url: this.signalingUrl },
       devices: this.devices,
@@ -210,13 +210,14 @@ export class ShareGoEngine {
     if (typeof window === "undefined") return;
     if (this.signaling) return;
 
+    this.deviceType = detectDeviceType();
     this.deviceName = readStoredName() ?? guessDeviceName();
     const signalingUrl = resolveSignalingUrl();
     if (!signalingUrl) {
       this.signalingStatus = "offline";
       this.appendLog(
         "warn",
-        "No signaling server is configured. Set NEXT_PUBLIC_SIGNALING_URL to a public wss:// URL.",
+        "No signaling server is configured. Set NEXT_PUBLIC_SIGNALING_URL or open ShareGo from a supported HTTP(S) origin.",
       );
       this.invalidate();
       return;
@@ -226,7 +227,7 @@ export class ShareGoEngine {
     const signaling = new SignalingClient({
       url: this.signalingUrl,
       deviceName: this.deviceName,
-      deviceType: detectDeviceType(),
+      deviceType: this.deviceType,
       events: {
         onStatus: (status) => {
           this.signalingStatus = status;
