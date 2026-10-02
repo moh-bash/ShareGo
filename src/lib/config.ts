@@ -5,11 +5,9 @@
  *   1. a value the user typed into the app (persisted in localStorage) — this
  *      is what makes testing on a second device painless,
  *   2. `NEXT_PUBLIC_SIGNALING_URL` from the environment,
- *   3. derived from `window.location` for local HTTP development, so opening
- *      the app from another device on the same Wi-Fi "just works".
+ *   3. the same-origin Vercel WebSocket endpoint in production,
+ *   4. derived from `window.location` for local HTTP development.
  *
- * HTTPS deployments must configure `NEXT_PUBLIC_SIGNALING_URL`. We cannot
- * safely infer a standalone WebSocket service from a Vercel page URL.
  */
 
 const URL_STORAGE_KEY = "sharego.signalingUrl";
@@ -38,6 +36,7 @@ function storeUrl(url: string | null): void {
 
 function deriveUrlFromLocation(): string | null {
   const { protocol, hostname, port } = window.location;
+  if (protocol === "https:") return `wss://${window.location.host}/api/ws`;
   if (protocol !== "http:") return null;
 
   // The signaling server never runs on the same port as Next.js in dev.

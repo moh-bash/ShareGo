@@ -63,64 +63,28 @@ frontend setting is:
 NEXT_PUBLIC_SIGNALING_URL=ws://localhost:8080
 ```
 
-For a deployed frontend, use the public WebSocket endpoint:
-
-```dotenv
-NEXT_PUBLIC_SIGNALING_URL=wss://signaling.example.com
-```
+For a Vercel deployment, the app automatically uses
+`wss://<deployment-host>/api/ws`. The optional `NEXT_PUBLIC_SIGNALING_URL`
+override is still available in Settings and for local/custom testing.
 
 `NEXT_PUBLIC_*` values are embedded at build time, so rebuild or restart the
 Next.js process after changing them. The server-side settings
 `SIGNALING_HOST` and `SIGNALING_PORT` control where the standalone signaling
 process listens.
 
-## Deployment
+## Vercel deployment
 
-The frontend and signaling server are separate deployments:
+1. Create an Upstash Redis database through the Vercel integration and expose
+   `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to the deployment.
+2. Deploy this repository to Vercel with Fluid Compute enabled. The WebSocket
+   function is `api/ws.ts`; it stores only short-lived signaling presence and
+   relay envelopes in Redis. File bytes never enter the function or Redis.
+3. Open the deployment URL on both devices. The client derives
+   `wss://<deployment-host>/api/ws` automatically.
 
-1. Deploy the Next.js application to Vercel or another platform that supports
-   Next.js.
-2. Deploy `npm run signal` to a long-running Node.js service with persistent
-   WebSocket support. A normal Vercel request function is not a replacement for
-   this process because the roster is held in that process's memory. The
-   included [`signaling/Dockerfile`](./signaling/Dockerfile) can be used by
-   Docker-based hosts:
-
-   ```bash
-   docker build -f signaling/Dockerfile -t sharego-signaling .
-   docker run --rm -p 8080:8080 \
-     -e SIGNALING_HOST=0.0.0.0 \
-     -e SIGNALING_PORT=8080 \
-     sharego-signaling
-   ```
-
-   If the provider supplies a `PORT` environment variable, the server uses it
-   when `SIGNALING_PORT` is not set. Ensure the provider exposes that port and
-   keeps the process running.
-3. Put the signaling service behind a TLS-capable reverse proxy or the
-   provider's managed TLS. Terminate HTTPS/WSS there and proxy WebSocket
-   upgrades to the Node process over plain `ws://127.0.0.1:<port>`. The
-   signaling process itself is intentionally a plain `ws` server; it does not
-   store certificates or file data.
-4. Set the Vercel project's build-time environment variable:
-
-   ```dotenv
-   NEXT_PUBLIC_SIGNALING_URL=wss://signaling.example.com
-   ```
-
-   Replace the hostname with the public WSS hostname configured for the
-   signaling service. Redeploy the Vercel project after changing it because
-   `NEXT_PUBLIC_*` values are embedded into the client bundle at build time.
-   The production browser will not derive a port-8080 socket from the Vercel
-   page URL. A previously saved URL in Settings takes precedence, so clear or
-   replace that value when testing an existing browser profile.
-5. Configure the signaling service's host, port, TLS termination, and network
-   firewall according to the hosting provider. Allow WebSocket upgrade requests
-   and permit the browser origin used by the frontend at the proxy layer if
-   the provider applies origin filtering.
-
-The included signaling server keeps presence in memory only. Restarting it
-disconnects all devices and clears the roster.
+Vercel WebSocket connections are duration-limited and may reconnect. Redis TTLs
+remove stale presence, and the client already tears down WebRTC state and
+reconnects when signaling is interrupted.
 
 ## How the connection works
 
