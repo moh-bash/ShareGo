@@ -5,8 +5,11 @@
  *   1. a value the user typed into the app (persisted in localStorage) — this
  *      is what makes testing on a second device painless,
  *   2. `NEXT_PUBLIC_SIGNALING_URL` from the environment,
- *   3. derived from `window.location`, so opening the app from another device
- *      on the same Wi-Fi "just works" with the default port.
+ *   3. derived from `window.location` for local HTTP development, so opening
+ *      the app from another device on the same Wi-Fi "just works".
+ *
+ * HTTPS deployments must configure `NEXT_PUBLIC_SIGNALING_URL`. We cannot
+ * safely infer a standalone WebSocket service from a Vercel page URL.
  */
 
 const URL_STORAGE_KEY = "sharego.signalingUrl";
@@ -33,23 +36,24 @@ function storeUrl(url: string | null): void {
   }
 }
 
-function deriveUrlFromLocation(): string {
+function deriveUrlFromLocation(): string | null {
   const { protocol, hostname, port } = window.location;
-  const scheme = protocol === "https:" ? "wss:" : "ws:";
+  if (protocol !== "http:") return null;
+
   // The signaling server never runs on the same port as Next.js in dev.
   const signalingPort =
     port && port !== "3000" && port !== "3001" ? port : String(DEFAULT_SIGNALING_PORT);
-  return `${scheme}//${hostname || "localhost"}:${signalingPort}`;
+  return `ws://${hostname || "localhost"}:${signalingPort}`;
 }
 
-export function resolveSignalingUrl(): string {
+export function resolveSignalingUrl(): string | null {
   const stored = readStoredUrl();
   if (stored) return stored;
 
   const fromEnv = process.env.NEXT_PUBLIC_SIGNALING_URL?.trim();
   if (fromEnv) return fromEnv;
 
-  if (typeof window === "undefined") return `ws://localhost:${DEFAULT_SIGNALING_PORT}`;
+  if (typeof window === "undefined") return null;
   return deriveUrlFromLocation();
 }
 

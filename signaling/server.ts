@@ -27,7 +27,7 @@ import {
   type SignalErrorCode,
 } from "../src/types/signaling";
 
-const PORT = readInt(process.env.SIGNALING_PORT, 8080);
+const PORT = readInt(process.env.SIGNALING_PORT ?? process.env.PORT, 8080);
 const HOST = process.env.SIGNALING_HOST ?? "0.0.0.0";
 /** Per-socket message rate limit, to stop a runaway client flooding peers. */
 const RATE_LIMIT_MAX_MESSAGES = 240;

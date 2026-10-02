@@ -73,7 +73,7 @@ export class ShareGoEngine {
   private deviceId: string | null = null;
   private deviceName = "This device";
   private signalingStatus: SignalingStatus = "idle";
-  private signalingUrl = "ws://localhost:8080";
+  private signalingUrl = "";
   private devices: DeviceInfo[] = [];
   private peers: Record<string, PeerSnapshot> = {};
   private incomingRequests: IncomingRequestSnapshot[] = [];
@@ -211,7 +211,17 @@ export class ShareGoEngine {
     if (this.signaling) return;
 
     this.deviceName = readStoredName() ?? guessDeviceName();
-    this.signalingUrl = resolveSignalingUrl();
+    const signalingUrl = resolveSignalingUrl();
+    if (!signalingUrl) {
+      this.signalingStatus = "offline";
+      this.appendLog(
+        "warn",
+        "No signaling server is configured. Set NEXT_PUBLIC_SIGNALING_URL to a public wss:// URL.",
+      );
+      this.invalidate();
+      return;
+    }
+    this.signalingUrl = signalingUrl;
 
     const signaling = new SignalingClient({
       url: this.signalingUrl,
