@@ -40,7 +40,6 @@ export class ChunkSender {
   private sequence = 0;
   private cancelled = false;
   private waiters: Array<() => void> = [];
-  private detach: Array<() => void> = [];
   private finished = false;
 
   constructor(private readonly options: ChunkSenderOptions) {
@@ -51,15 +50,10 @@ export class ChunkSender {
     this.length = Math.min(options.length, options.file.size - options.offset);
   }
 
-  get bytesSentSoFar(): number {
-    return this.bytesSent;
-  }
-
   cancel(): void {
     if (this.finished) return;
     this.cancelled = true;
     this.resolveWaiters();
-    this.release();
   }
 
   /**
@@ -108,12 +102,10 @@ export class ChunkSender {
 
       if (this.cancelled) return;
       this.finished = true;
-      this.release();
       this.options.onDone?.(this.bytesSent);
     } catch (error) {
       this.finished = true;
       this.resolveWaiters();
-      this.release();
       if (!this.cancelled) {
         this.options.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
@@ -149,10 +141,5 @@ export class ChunkSender {
     const waiters = this.waiters;
     this.waiters = [];
     for (const waiter of waiters) waiter();
-  }
-
-  private release(): void {
-    for (const off of this.detach) off();
-    this.detach = [];
   }
 }

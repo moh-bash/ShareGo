@@ -1,15 +1,17 @@
 /**
- * Signaling protocol: the *only* thing that ever travels over the WebSocket.
+ * Signaling protocol: the *only* thing that ever travels over the signaling
+ * transport (an HTTP endpoint with a server->client SSE stream and client->server
+ * POSTs — see `lib/signaling/hub.ts`).
  *
  * Rules that must not be broken:
  *  1. File bytes are NEVER sent here. They go over a WebRTC DataChannel.
  *  2. The server never trusts a client supplied `from` / `deviceId`; it always
- *     stamps those from the authenticated socket session.
- *  3. Everything is validated at runtime (see `lib/websocket/protocol.ts`)
+ *     stamps those from the session it resolved for the caller.
+ *  3. Everything is validated at runtime (see `lib/signaling/protocol.ts`)
  *     because this is untrusted input from the network.
  */
 
-export const SIGNAL_PROTOCOL_VERSION = 1;
+export const SIGNAL_PROTOCOL_VERSION = 2;
 
 /** How long the *receiver* of a connection request keeps the dialog open. */
 export const CONNECTION_REQUEST_TIMEOUT_MS = 30_000;
@@ -26,6 +28,7 @@ export interface DeviceInfo {
 export type SignalErrorCode =
   | "bad-message"
   | "name-required"
+  | "unknown-session"
   | "unknown-device"
   | "target-required"
   | "self-target"
@@ -33,19 +36,19 @@ export type SignalErrorCode =
   | "request-expired"
   | "too-many-requests"
   | "rate-limited"
+  | "server-busy"
   | "internal";
 
 /* ------------------------------------------------------------------ */
 /* Client -> Server                                                    */
 /* ------------------------------------------------------------------ */
 
-/** First message a socket sends; the server answers with `welcome`. */
-export interface HelloMessage {
-  type: "hello";
-  protocol: number;
-  deviceName: string;
-  deviceType: DeviceType;
-}
+/**
+ * A device is identified by opening the signaling stream (`GET`) with the
+ * `session` token it was last handed. There is no `hello`: identity travels in
+ * the stream URL, so the server can answer `welcome` — and start relaying —
+ * without a second round trip.
+ */
 
 export interface RenameMessage {
   type: "rename";
@@ -90,21 +93,14 @@ export interface DisconnectPeerMessage {
   to: string;
 }
 
-export interface PingMessage {
-  type: "ping";
-  at: number;
-}
-
 export type ClientSignalMessage =
-  | HelloMessage
   | RenameMessage
   | ConnectionRequestMessage
   | ConnectionResponseMessage
   | OfferMessage
   | AnswerMessage
   | IceCandidateMessage
-  | DisconnectPeerMessage
-  | PingMessage;
+  | DisconnectPeerMessage;
 
 /* ------------------------------------------------------------------ */
 /* Server -> Client                                                    */
@@ -113,13 +109,25 @@ export type ClientSignalMessage =
 export interface WelcomeMessage {
   type: "welcome";
   protocol: number;
-  /** Server generated. Every socket gets a fresh id, so ids are ephemeral. */
+  /** Server generated. Stable for as long as the `sessionToken` is presented. */
   deviceId: string;
+  /**
+   * Secret handle for this session. Present it on the next `GET` to keep the
+   * same `deviceId` across a reconnect (reloads, network blips, the platform
+   * recycling the stream). Treat it like a cookie: never log it.
+   */
+  sessionToken: string;
   deviceName: string;
   /** Everyone else currently on this signaling server. */
   devices: DeviceInfo[];
   config: {
     connectionRequestTimeoutMs: number;
+    /**
+     * `false` when the deployment has no shared directory, so devices landing on
+     * different server instances cannot see each other. Surfaced in the UI
+     * rather than failing silently.
+     */
+    sharedDirectory: boolean;
   };
 }
 
@@ -137,7 +145,11 @@ export interface ConnectionRequestIncomingMessage {
   type: "connection-request";
   from: DeviceInfo;
   requestId: string;
-  expiresAt: number;
+  /**
+   * Relative, never an absolute timestamp: the two devices rarely agree on the
+   * wall clock, and a skewed clock would expire the dialog instantly (or never).
+   */
+  expiresInMs: number;
 }
 
 export interface ConnectionResponseIncomingMessage {
@@ -178,11 +190,6 @@ export interface ErrorMessage {
   requestId?: string;
 }
 
-export interface PongMessage {
-  type: "pong";
-  at: number;
-}
-
 export type ServerSignalMessage =
   | WelcomeMessage
   | DevicesMessage
@@ -193,8 +200,7 @@ export type ServerSignalMessage =
   | AnswerIncomingMessage
   | IceCandidateIncomingMessage
   | PeerDisconnectedMessage
-  | ErrorMessage
-  | PongMessage;
+  | ErrorMessage;
 
 /* ------------------------------------------------------------------ */
 /* Client side connection status                                       */

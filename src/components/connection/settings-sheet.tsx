@@ -3,10 +3,10 @@
 /**
  * Settings + activity log.
  *
- * The signaling URL lives here because testing on a second device is the single
- * most common stumbling block: the phone has to dial the *development machine's*
- * LAN address, not `localhost`. The log is here for the same reason — when a
- * connection does not form, the WebRTC/ICE sequence should be inspectable
+ * The signaling endpoint lives here because testing on a second device is the
+ * single most common stumbling block: the phone has to dial the *development
+ * machine's* LAN address, not `localhost`. The log is here for the same reason —
+ * when a connection does not form, the WebRTC/ICE sequence should be inspectable
  * without opening devtools.
  */
 
@@ -49,22 +49,31 @@ function SettingsForm() {
     const trimmed = urlDraft.trim();
     if (trimmed.length === 0) return;
     if (!isValidSignalingUrl(trimmed)) {
-      setUrlError("That does not look like a ws:// or wss:// address.");
+      setUrlError("That does not look like an http:// or https:// address.");
       return;
     }
     setUrlError(null);
     engine.changeSignalingUrl(trimmed);
-    engine.notify({ tone: "info", title: "Signaling server updated", description: normaliseUrl(trimmed) });
+    engine.notify({ tone: "info", title: "Signaling endpoint updated", description: normaliseUrl(trimmed) });
   }
+
+  function resetUrl() {
+    setUrlError(null);
+    engine.resetSignalingUrl();
+    engine.notify({ tone: "info", title: "Back to the default signaling endpoint" });
+  }
+
+  const isDefault = urlDraft.trim() === signaling.url;
+  const canReset = !isDefault || urlError !== null;
 
   return (
     <div className="space-y-6 px-5 py-5">
         <section aria-labelledby="settings-server">
           <h3 id="settings-server" className="text-sm font-semibold text-ink">
-            Signaling server
+            Signaling endpoint
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-ink-muted">
-            ShareGo introduces devices to each other over this WebSocket server, then
+            ShareGo introduces devices to each other over this endpoint, then
             transfers files directly between them. No file data passes through it.
           </p>
 
@@ -82,24 +91,32 @@ function SettingsForm() {
                 setUrlError(null);
               }}
               spellCheck={false}
-              aria-label="Signaling server address"
-              placeholder="ws://192.168.1.20:8080"
+              aria-label="Signaling endpoint address"
+              aria-invalid={urlError !== null}
+              aria-describedby={urlError ? "settings-url-error" : "settings-url-hint"}
+              placeholder="http://192.168.1.20:3000/api/signal"
               className="focus-ring h-11 min-w-0 flex-1 rounded-xl border border-hairline bg-surface-2 px-3 font-mono text-sm text-ink placeholder:text-ink-faint"
             />
-            <Button variant="primary" type="submit" disabled={urlDraft.trim() === signaling.url}>
+            <Button variant="primary" type="submit" disabled={isDefault}>
               Reconnect
+            </Button>
+            <Button variant="ghost" type="button" onClick={resetUrl} disabled={!canReset}>
+              Use default
             </Button>
           </form>
 
           {urlError ? (
-            <p className="mt-2 text-xs text-negative">{urlError}</p>
+            <p id="settings-url-error" role="alert" className="mt-2 text-xs text-negative">
+              {urlError}
+            </p>
           ) : (
-            <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-faint">
+            <p id="settings-url-hint" className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-faint">
               <InfoIcon className="mt-px size-3.5 shrink-0" />
               <span>
-                On a phone, use your computer&apos;s LAN address (for example{" "}
-                <code className="font-mono text-ink-muted">ws://192.168.1.20:8080</code>). The
-                signaling server prints the exact URLs when it starts.
+                By default ShareGo uses its own <code className="font-mono text-ink-muted">/api/signal</code>{" "}
+                route on whichever address you opened the page from, so nothing needs configuring.
+                On a phone, open the dev machine&apos;s LAN address instead of{" "}
+                <code className="font-mono text-ink-muted">localhost</code>.
               </span>
             </p>
           )}

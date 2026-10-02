@@ -1,129 +1,148 @@
 # ShareGo
 
-ShareGo is a browser-based local file-sharing application. Devices discover
-each other through a small WebSocket signaling server, then transfer file
-metadata and bytes directly over WebRTC DataChannels whenever the network
-allows it.
+ShareGo is a browser-based local file-sharing application. Devices discover each
+other through a signaling endpoint built into the app, then transfer file
+metadata and bytes directly over WebRTC DataChannels whenever the network allows
+it.
 
-The signaling server never receives, stores, or proxies file contents.
+Nothing is uploaded, stored or proxied: the signaling endpoint only introduces
+two devices to each other and steps aside. File bytes go straight from one
+browser to the other.
 
 ## Requirements
 
 - Node.js 20 or newer
 - A modern browser with WebRTC DataChannel support
-- Network access between the browsers and the signaling server
+- Network access between the browsers
+- Optionally an Upstash Redis database, but only for multi-instance deployments
 
 ## Local development
 
-Install dependencies and start the Next.js app plus the signaling server:
-
 ```bash
 npm install
-npm run dev:all
+npm run dev
 ```
 
-Open `http://localhost:3000` in one or more browser windows. The signaling
-server listens on port `8080` by default.
+Open `http://localhost:3000` in one or more browser windows. There is no second
+process to start: the signaling endpoint is a route in the app itself
+(`/api/signal`), so every window on the same origin sees every other window.
 
 For two physical devices on the same Wi-Fi:
 
-1. Start ShareGo on the development computer with `npm run dev:all`.
-2. Use the LAN URL printed by the signaling server, not `localhost`, when
-   opening the app on the second device.
-3. If the app and signaling server are on different hosts, enter the
-   reachable WebSocket URL in **Settings**, for example
-   `ws://192.168.1.20:8080`.
-4. Add files explicitly with the file picker on one device.
-5. From the other device, send a connection request and accept it on the first
-   device.
-6. Browse the shared metadata, preview supported media, or download files.
+1. Start ShareGo with `npm run dev` on the development computer.
+2. Open the computer's LAN address on the second device, e.g.
+   `http://192.168.1.20:3000`. Use the LAN address, not `localhost` — the
+   browser must be able to reach the machine.
+3. Add files explicitly with the file picker on one device.
+4. From the other device, send a connection request and accept it on the first.
+5. Browse the shared metadata, preview supported media, or download files.
 
 The browser sandbox means ShareGo can only access files the user explicitly
-selects. It cannot enumerate `C:\`, `Users`, Downloads, or other folders
-without a file-picker action.
+selects. It cannot enumerate `C:\`, `Users`, Downloads or other folders without a
+file-picker action.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev:all` | Start signaling and Next.js together |
-| `npm run dev` | Start only the Next.js development server |
-| `npm run signal` | Start only the WebSocket signaling server |
-| `npm run typecheck` | Type-check the frontend and signaling server |
-| `npm run lint` | Run ESLint |
-| `npm run build` | Create a production Next.js build |
+| `npm run dev` | Start the development server (app + signaling route) |
+| `npm run build` | Create a production build |
 | `npm run start` | Start the production Next.js server |
+| `npm run typecheck` | Type-check the whole repository |
+| `npm run lint` | Run ESLint (includes the React Compiler rules) |
+
+There is no test suite or test runner.
 
 ## Configuration
 
-Copy `.env.example` to `.env.local` for local overrides. The important
-frontend setting is:
+Everything is optional; see `.env.example` for the full list. The two that
+matter:
 
-```dotenv
-NEXT_PUBLIC_SIGNALING_URL=ws://localhost:8080
+| Variable | Why |
+| --- | --- |
+| `NEXT_PUBLIC_SIGNALING_URL` | Point the app at a signaling origin other than the one serving the page. A bare origin is enough — `/api/signal` is appended. Also editable at runtime in **Settings**, where it is persisted in `localStorage`. |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Shared presence and relay bus. Required only when the deployment runs more than one instance; without them the app still works but devices landing on different instances cannot find each other, and the activity log says so. |
+
+`NEXT_PUBLIC_*` values are embedded at build time, so restart `next dev` after
+changing one.
+
+## Deploying to Vercel
+
+```bash
+vercel --prod
 ```
 
-For a Vercel deployment, the app automatically uses
-`wss://<deployment-host>/api/ws`. The optional `NEXT_PUBLIC_SIGNALING_URL`
-override is still available in Settings and for local/custom testing.
+Then, in the deployment's environment settings:
 
-`NEXT_PUBLIC_*` values are embedded at build time, so rebuild or restart the
-Next.js process after changing them. The server-side settings
-`SIGNALING_HOST` and `SIGNALING_PORT` control where the standalone signaling
-process listens.
+- **Required for multiple instances:** `UPSTASH_REDIS_REST_URL` and
+  `UPSTASH_REDIS_REST_TOKEN`, from the Upstash integration. Without them the
+  app is fine on a single instance and quietly limited on several.
+- **Optional:** `NEXT_PUBLIC_ICE_SERVERS` with a TURN relay, if peers have to
+  connect across restrictive NATs.
 
-## Vercel deployment
-
-1. Create an Upstash Redis database through the Vercel integration and expose
-   `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to the deployment.
-2. Deploy this repository to Vercel with Fluid Compute enabled. The WebSocket
-   function is `api/ws.ts`; it stores only short-lived signaling presence and
-   relay envelopes in Redis. File bytes never enter the function or Redis.
-3. Open the deployment URL on both devices. The client derives
-   `wss://<deployment-host>/api/ws` automatically.
-
-Vercel WebSocket connections are duration-limited and may reconnect. Redis TTLs
-remove stale presence, and the client already tears down WebRTC state and
-reconnects when signaling is interrupted.
+No extra build settings and no `vercel.json` are needed. `/api/signal` is an
+ordinary route handler on the Node.js runtime, so it is discovered by the build
+like any page.
 
 ## How the connection works
 
-1. Each browser opens a WebSocket and announces a display name and device type.
-2. The server broadcasts the current online-device roster.
+1. Each browser opens `GET /api/signal`, a `text/event-stream`, passing the
+   session token it was last handed. The server answers with `welcome`
+   immediately — no handshake round trip.
+2. The server broadcasts the current device roster. Each device's roster omits
+   itself, so nobody has to guess which entry is "me".
 3. A user sends a connection request; the recipient must explicitly accept it.
-4. The requesting browser creates the WebRTC offer. The peers exchange the
-   offer, answer, and ICE candidates through the signaling server.
-5. Two reliable DataChannels carry control messages and chunked file frames.
+   Nothing is negotiated before that, not even an SDP offer.
+4. The requesting browser creates the WebRTC offer. Peers exchange offers,
+   answers and ICE candidates by `POST`ing one message each to `/api/signal`,
+   which relays it to the target device's stream.
+5. Two reliable DataChannels (`sharego-control` and `sharego-file`) carry
+   control messages and chunked file frames.
 6. Only explicitly selected files are eligible to be requested by a peer.
 
+### Why an event stream instead of a WebSocket
+
+A WebSocket needs a process that stays alive and holds the socket, which a
+serverless platform will eventually stop. The event stream is just a long HTTP
+response, so it degrades in the least harmful way available: when the platform
+ends it, the browser reconnects and — because the URL carries the session token
+minted in `welcome` — comes back with the *same* deviceId. Established
+peer-to-peer connections are not touched by a signaling blip at all.
+
+`deviceId` is still minted by the server. A client can hold its own session
+token, but it can never claim to be another device, and the `from` field on
+every relayed message is stamped server-side.
+
 Transfers use bounded chunks and DataChannel backpressure. Downloads are
-assembled into a Blob and saved by the browser. Image, audio, and video
-previews use a progressive MediaSource path where supported, with a complete
-Blob fallback where it is not.
+assembled into a Blob and saved by the browser. Image, audio and video previews
+use a progressive MediaSource path where supported, with a complete Blob
+fallback where it is not.
 
 ## Browser and network limitations
 
 - The browser sandbox requires explicit file selection.
 - DataChannels are not HTTP streams and do not provide native Range requests.
 - Some video containers can only start after the entire file arrives, especially
-  when the container index is at the end of the file.
+  when the container index sits at the end of the file (MP4s written without
+  `+faststart`).
 - Very large previews may require substantial browser memory.
 - WebRTC may fail across restrictive NATs or firewalls. The default STUN
-  configuration helps discover routes, but production deployments may also
-  need a TURN relay configured through `NEXT_PUBLIC_ICE_SERVERS`.
+  configuration helps discover routes, but production deployments may also need a
+  TURN relay configured through `NEXT_PUBLIC_ICE_SERVERS`.
 - Signaling presence is not Wi-Fi scanning; it only includes browsers connected
   to the same signaling endpoint.
 
 ## Manual verification checklist
 
-Use two browser windows or two physical devices to verify:
+Two windows on one machine work (ICE host candidates are used), and two physical
+devices are the real test:
 
-- Both devices appear and disappear from **Nearby devices** as sockets connect
-  and disconnect.
-- Connection request, explicit accept, reject, timeout, and disconnect states.
-- WebRTC connection reaches **Connected** before file actions are enabled.
-- Image, video, audio, and document metadata appears remotely.
+- Both devices appear and disappear from **Nearby devices** as they connect and
+  disconnect.
+- Connection request, explicit accept, reject, timeout and disconnect states.
+- WebRTC reaches **Connected** before file actions are enabled.
+- Image, video, audio and document metadata appears remotely.
 - Small and large chunked downloads show progress and speed.
-- Preview transfers retrieve bytes from the remote peer and release object URLs
-  when closed.
+- Preview transfers pull bytes from the remote peer and release object URLs when
+  closed.
 - Adding or removing a shared file refreshes the remote file list.

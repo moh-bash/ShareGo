@@ -26,6 +26,11 @@ import type { TransferPurpose } from "@/types/files";
 import type { DeviceType } from "@/types/signaling";
 import type { ControlMessage, SharedFileMetaLite } from "@/types/webrtc";
 
+/** Shown when a peer goes away mid-transfer; both sides see their own wording. */
+const TRANSFER_LOST = "The connection dropped before this file finished.";
+/** How long a self-releasing download keeps its blob alive after auto-save. */
+const SAVED_ARTIFACT_GRACE_MS = 30_000;
+
 /** What the engine needs from a connected peer in order to move bytes. */
 export interface DataPlane {
   peerId: string;
@@ -86,6 +91,7 @@ export class TransferEngine {
   private outgoing = new Map<string, OutgoingTransfer>();
   private incoming = new Map<string, IncomingTransfer>();
   private queues = new Map<string, QueuedRequest[]>();
+  private releaseTimers = new Set<ReturnType<typeof setTimeout>>();
   private nextTransferId = createCounter(1);
 
   constructor(options: TransferEngineOptions) {
@@ -116,13 +122,24 @@ export class TransferEngine {
     for (const [key, transfer] of [...this.incoming]) {
       if (transfer.peerId !== peerId) continue;
       transfer.cancelled = true;
-      transfer.receiver.cancel("The peer disconnected.");
+      transfer.receiver.cancel(TRANSFER_LOST);
       transfer.dispose();
       this.incoming.delete(key);
+      // The bytes are gone, but the artifact stays so whatever is showing it
+      // (a preview dialog, a progress row) can say *why* instead of silently
+      // reverting to an empty "waiting for data" spinner.
+      this.artifacts.patch(transfer.artifactId, {
+        status: "error",
+        error: TRANSFER_LOST,
+      });
+      this.transfers.update(peerId, transfer.transferId, {
+        status: "error",
+        error: TRANSFER_LOST,
+        speedBytesPerSecond: 0,
+      });
     }
 
     this.transfers.clearPeer(peerId);
-    this.artifacts.releasePeer(peerId);
   }
 
   /** Push our current shared file list to a newly connected peer. */
@@ -161,9 +178,12 @@ export class TransferEngine {
         this.enqueueIncomingRequest(peerId, message);
         return;
 
-      case "transfer-done":
-        this.incoming.get(TransferStore.key(peerId, message.transferId))?.receiver.complete();
+      case "transfer-done": {
+        this.incoming
+          .get(TransferStore.key(peerId, message.transferId))
+          ?.receiver.complete(message.bytesSent);
         return;
+      }
 
       case "transfer-error": {
         const key = TransferStore.key(peerId, message.transferId);
@@ -404,8 +424,22 @@ export class TransferEngine {
   /* Inbound: request a file from a peer                            */
   /* -------------------------------------------------------------- */
 
-  /** Start receiving `meta` from `peerId`. Returns the artifact id. */
-  requestFile(peerId: string, meta: SharedFileMetaLite, purpose: TransferPurpose): string {
+  /**
+   * Start receiving `meta` from `peerId`. Returns the artifact id.
+   *
+   * `disposeAfterSave` marks a download nobody is going to look at again: the
+   * remote browser's Download button. The bytes are handed to the browser's
+   * download manager and the artifact is dropped, because the only thing that
+   * can still reference it would have to be an open preview dialog, and that
+   * dialog asks for its own copy. Without this, every download keeps a full Blob
+   * and a live object URL for the lifetime of the tab.
+   */
+  requestFile(
+    peerId: string,
+    meta: SharedFileMetaLite,
+    purpose: TransferPurpose,
+    options?: { disposeAfterSave?: boolean },
+  ): string {
     const plane = this.planes.get(peerId);
     if (!plane?.isOpen()) {
       throw new Error("That device is not connected right now.");
@@ -482,7 +516,10 @@ export class TransferEngine {
         // A download the user explicitly asked for should land in their
         // downloads folder without a second click. Previews never do this —
         // nobody wants a previewed file silently saved.
-        if (purpose === "download") this.saveArtifact(artifactId);
+        if (purpose === "download") {
+          this.saveArtifact(artifactId);
+          if (options?.disposeAfterSave) this.releaseAfterSave(artifactId);
+        }
       },
       onError: (error) => {
         this.incoming.delete(key);
@@ -566,14 +603,56 @@ export class TransferEngine {
     }
   }
 
-  /** Free the bytes held for a preview/download the user has closed. */
+  /**
+   * Free the bytes held for a preview/download the user has closed.
+   *
+   * Releasing an artifact that is still streaming also cancels the transfer and
+   * tells the peer to stop: otherwise the sender keeps pushing chunks into a
+   * sink that throws them away, and the row in the transfer panel never
+   * terminates.
+   */
   releaseArtifact(artifactId: string): void {
+    // An artifact id *is* the transfer key (`requestFile` sets `artifactId = key`).
+    const transfer = this.incoming.get(artifactId);
+    if (transfer) {
+      const { peerId, transferId } = transfer;
+      transfer.cancelled = true;
+      transfer.receiver.cancel("You closed it.");
+      transfer.dispose();
+      this.incoming.delete(artifactId);
+      this.transfers.update(peerId, transferId, {
+        status: "cancelled",
+        speedBytesPerSecond: 0,
+      });
+
+      const plane = this.planes.get(peerId);
+      if (plane?.isOpen()) {
+        plane.sendControl({ type: "cancel-transfer", transferId });
+      }
+    }
+
     this.artifacts.release(artifactId);
   }
 
   /**
+   * Release an artifact after the browser has taken the bytes.
+   *
+   * `anchor.click()` hands the blob URL to the download manager, which may not
+   * have read it yet when the call returns, so the object URL cannot be revoked
+   * synchronously — doing so is the classic way to produce an empty file. The
+   * grace period is only paid by downloads nothing else can reference.
+   */
+  private releaseAfterSave(artifactId: string): void {
+    const timer = setTimeout(() => {
+      this.releaseTimers.delete(timer);
+      this.releaseArtifact(artifactId);
+    }, SAVED_ARTIFACT_GRACE_MS);
+    this.releaseTimers.add(timer);
+  }
+
+  /**
    * Hand finished bytes to the browser's download manager. The Blob is kept
-   * until `releaseArtifact`, so the transfer panel can offer "Save again".
+   * until `releaseArtifact`, so an open preview dialog can offer "Save again".
    */
   saveArtifact(artifactId: string): boolean {
     const artifact = this.artifacts.get(artifactId);
@@ -590,6 +669,8 @@ export class TransferEngine {
   }
 
   dispose(): void {
+    for (const timer of this.releaseTimers) clearTimeout(timer);
+    this.releaseTimers.clear();
     for (const transfer of this.outgoing.values()) transfer.sender?.cancel();
     for (const transfer of this.incoming.values()) transfer.dispose();
     this.outgoing.clear();

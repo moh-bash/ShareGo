@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { AlertIcon, CheckIcon, CloseIcon, InfoIcon } from "./icons";
 import type { ToastMessage } from "@/types/files";
 
@@ -54,24 +53,4 @@ export function ToastRegion({
       })}
     </div>
   );
-}
-
-/**
- * Small helper used by features that need to know whether the viewport is
- * phone-sized. Only renders on the client, so guard with `null` until mounted
- * if it affects server markup (it does not here — the app shell is a client
- * component).
- */
-export function useIsCompact(): boolean {
-  const [compact, setCompact] = useState(false);
-
-  useEffect(() => {
-    const query = window.matchMedia("(max-width: 1023px)");
-    const update = () => setCompact(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return compact;
 }

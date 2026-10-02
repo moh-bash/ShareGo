@@ -9,6 +9,12 @@
 
 import { SpeedMeter } from "@/lib/file-transfer/speed";
 
+/**
+ * How long to keep waiting for payload bytes after `transfer-done` has overtaken
+ * them. Generous, because it only runs while a transfer is genuinely in flight.
+ */
+const DRAIN_TIMEOUT_MS = 15_000;
+
 export interface IncomingTransferSink {
   /** Called for every chunk, in arrival order. */
   write(chunk: Uint8Array): void | Promise<void>;
@@ -41,6 +47,9 @@ export class ChunkReceiver {
   private onError: ChunkReceiverOptions["onError"];
   /** Serialises sink writes: SourceBuffer.appendBuffer cannot overlap. */
   private writeChain: Promise<void> = Promise.resolve();
+  /** Bytes the sender said it sent, while we are still waiting for them. */
+  private drainUntil: number | null = null;
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ChunkReceiverOptions) {
     this.transferId = options.transferId;
@@ -87,14 +96,46 @@ export class ChunkReceiver {
 
     if (this.bytesReceived >= this.expectedBytes) {
       this.finish();
+      return;
+    }
+
+    // `transfer-done` may already have arrived over the control channel. Keep
+    // draining until the sender's byte count arrives, or the stall timeout fires.
+    if (this.drainUntil !== null && this.bytesReceived >= this.drainUntil) {
+      this.fail(
+        new Error(
+          `Transfer ended early: received ${this.bytesReceived} of ${this.expectedBytes} bytes.`,
+        ),
+      );
     }
   }
 
-  /** The sender confirmed the last chunk; flush the sink. */
-  complete(): void {
+  /**
+   * The sender confirmed it handed every byte to the DataChannel.
+   *
+   * This message arrives on the *control* channel while the payload arrives on
+   * the *file* channel. Two channels are two independent ordered streams with no
+   * ordering between them, and the control channel is empty, so this arrives
+   * first whenever the sender still had file bytes queued — which is exactly the
+   * interesting case, because a sender only has a backlog if it was pushing
+   * large chunks quickly. Treating the message as "the bytes are all here" made
+   * transfers of a few hundred kilobytes fail at whatever power-of-two boundary
+   * the backlog happened to sit at.
+   *
+   * So it is advisory: it tells us how many bytes to expect, and we wait for
+   * them. `expectedBytes` remains the authority on whether the file was complete.
+   */
+  complete(bytesSent: number): void {
     if (this.done) return;
 
-    if (this.bytesReceived !== this.expectedBytes) {
+    if (this.bytesReceived >= this.expectedBytes) {
+      this.finish();
+      return;
+    }
+
+    // The sender sent fewer bytes than it advertised: a genuine truncation, and
+    // waiting cannot help.
+    if (bytesSent <= this.bytesReceived) {
       this.fail(
         new Error(
           `Transfer ended early: received ${this.bytesReceived} of ${this.expectedBytes} bytes.`,
@@ -102,18 +143,33 @@ export class ChunkReceiver {
       );
       return;
     }
-    this.finish();
+
+    // More bytes are on the file channel than have arrived. Let the chunks land.
+    this.drainUntil = bytesSent;
+    if (this.drainTimer === null) {
+      this.drainTimer = setTimeout(() => {
+        this.drainTimer = null;
+        if (this.done || this.drainUntil === null) return;
+        this.fail(
+          new Error(
+            `Transfer stalled: received ${this.bytesReceived} of ${this.drainUntil} bytes.`,
+          ),
+        );
+      }, DRAIN_TIMEOUT_MS);
+    }
   }
 
   cancel(reason = "cancelled"): void {
     if (this.done) return;
     this.done = true;
+    this.clearDrain();
     this.sink.abort(reason);
   }
 
   private finish(): void {
     if (this.done) return;
     this.done = true;
+    this.clearDrain();
 
     this.writeChain
       .then(() => this.sink.end())
@@ -127,7 +183,14 @@ export class ChunkReceiver {
   private fail(error: Error): void {
     if (this.done) return;
     this.done = true;
+    this.clearDrain();
     this.sink.abort(error.message);
     this.onError?.(error);
+  }
+
+  private clearDrain(): void {
+    if (this.drainTimer !== null) clearTimeout(this.drainTimer);
+    this.drainTimer = null;
+    this.drainUntil = null;
   }
 }

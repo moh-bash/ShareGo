@@ -23,6 +23,7 @@ import {
   shortTypeLabel,
 } from "@/lib/utils/format";
 import { useArtifacts, useRemoteFiles } from "@/hooks/use-share-go";
+import type { Artifact } from "@/lib/app-store";
 import type { FileCategory } from "@/types/files";
 import type { SharedFileMetaLite } from "@/types/webrtc";
 
@@ -183,12 +184,24 @@ function FileGroup({
 /* Rows and tiles                                                      */
 /* ------------------------------------------------------------------ */
 
-function useArtifactFor(peerId: string, fileId: string) {
+/**
+ * Preview and download produce two separate artifacts for the same file, so a
+ * lookup that ignores `purpose` can hand back the wrong one: a finished preview
+ * would hide an in-flight download, or a download URL would be used as the
+ * thumbnail. Both are reported separately instead.
+ */
+function useArtifactsFor(peerId: string, fileId: string) {
   const artifacts = useArtifacts();
-  return useMemo(
-    () => artifacts.find((item) => item.peerId === peerId && item.fileId === fileId),
-    [artifacts, peerId, fileId],
-  );
+  return useMemo(() => {
+    let preview: Artifact | undefined;
+    let busy = false;
+    for (const item of artifacts) {
+      if (item.peerId !== peerId || item.fileId !== fileId) continue;
+      if (item.purpose === "preview") preview = item;
+      if (item.status === "pending" || item.status === "streaming") busy = true;
+    }
+    return { preview, busy };
+  }, [artifacts, peerId, fileId]);
 }
 
 function FileActions({
@@ -270,13 +283,12 @@ function FileTile({
   onPreview: (meta: SharedFileMetaLite) => void;
   onDownload: (meta: SharedFileMetaLite) => void;
 }) {
-  const artifact = useArtifactFor(peerId, file.fileId);
+  const { preview, busy } = useArtifactsFor(peerId, file.fileId);
   const kind = previewKind(file);
   // A preview we already fetched doubles as the thumbnail. We deliberately do
   // NOT prefetch thumbnails for every image: opening a 500-photo folder should
   // not start 500 transfers.
-  const thumbnail = kind === "image" ? (artifact?.url ?? null) : null;
-  const busy = artifact !== undefined && artifact.status !== "complete";
+  const thumbnail = kind === "image" ? (preview?.url ?? null) : null;
 
   return (
     <article className="panel-inset animate-rise flex flex-col overflow-hidden">
@@ -347,8 +359,7 @@ function FileRow({
   onPreview: (meta: SharedFileMetaLite) => void;
   onDownload: (meta: SharedFileMetaLite) => void;
 }) {
-  const artifact = useArtifactFor(peerId, file.fileId);
-  const busy = artifact !== undefined && artifact.status !== "complete";
+  const { busy } = useArtifactsFor(peerId, file.fileId);
 
   return (
     <article className="panel-inset flex items-center gap-3 px-3 py-2.5">
