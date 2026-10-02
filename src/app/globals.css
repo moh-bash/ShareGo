@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/*
+  ShareGo design tokens.
+
+  Dark-first by intent: the app is usually opened on a phone next to a laptop,
+  often at night, and a single well-tuned dark surface reads as "polished"
+  where an unfinished light theme reads as broken.
+*/
+
+@theme {
+  --color-canvas: #070a0f;
+  --color-surface: #0d1219;
+  --color-surface-2: #141b25;
+  --color-surface-3: #1c2532;
+  --color-hairline: #232d3c;
+  --color-ink: #e8eef7;
+  --color-ink-muted: #93a3b8;
+  --color-ink-faint: #61708a;
+
+  --color-accent: #38bdf8;
+  --color-accent-strong: #0ea5e9;
+  --color-accent-soft: #0b2b3d;
+
+  --color-positive: #34d399;
+  --color-caution: #fbbf24;
+  --color-negative: #fb7185;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-card: 1rem;
+
+  --animate-rise: rise 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-pulse-ring: pulse-ring 2s ease-out infinite;
+  --animate-indeterminate: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-positive) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 10px color-mix(in oklab, var(--color-positive) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-positive) 0%, transparent);
+  }
+}
+
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  /* Keep the layout from shifting when a dialog locks scrolling. */
+  scrollbar-gutter: stable;
+}
+
+/* A quiet radial wash so large empty areas are not dead flat. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(
+      70rem 40rem at 15% -10%,
+      color-mix(in oklab, var(--color-accent) 12%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      50rem 30rem at 100% 0%,
+      color-mix(in oklab, #a855f7 8%, transparent),
+      transparent 55%
+    );
+}
+
+@layer components {
+  .panel {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-hairline);
+    background: color-mix(in oklab, var(--color-surface) 88%, transparent);
+    backdrop-filter: blur(12px);
+  }
+
+  .panel-inset {
+    border-radius: 0.875rem;
+    border: 1px solid var(--color-hairline);
+    background: color-mix(in oklab, var(--color-surface-2) 70%, transparent);
+  }
+
+  /* Focus ring used on every interactive element. */
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .scroll-area {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-surface-3) transparent;
+  }
+  .scroll-area::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-area::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--color-surface-3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
