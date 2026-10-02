@@ -1,37 +1,134 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ShareGo
 
-## Getting Started
+ShareGo is a browser-based local file-sharing application. Devices discover
+each other through a small WebSocket signaling server, then transfer file
+metadata and bytes directly over WebRTC DataChannels whenever the network
+allows it.
 
-First, run the development server:
+The signaling server never receives, stores, or proxies file contents.
+
+## Requirements
+
+- Node.js 20 or newer
+- A modern browser with WebRTC DataChannel support
+- Network access between the browsers and the signaling server
+
+## Local development
+
+Install dependencies and start the Next.js app plus the signaling server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev:all
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000` in one or more browser windows. The signaling
+server listens on port `8080` by default.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+For two physical devices on the same Wi-Fi:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Start ShareGo on the development computer with `npm run dev:all`.
+2. Use the LAN URL printed by the signaling server, not `localhost`, when
+   opening the app on the second device.
+3. If the app and signaling server are on different hosts, enter the
+   reachable WebSocket URL in **Settings**, for example
+   `ws://192.168.1.20:8080`.
+4. Add files explicitly with the file picker on one device.
+5. From the other device, send a connection request and accept it on the first
+   device.
+6. Browse the shared metadata, preview supported media, or download files.
 
-## Learn More
+The browser sandbox means ShareGo can only access files the user explicitly
+selects. It cannot enumerate `C:\`, `Users`, Downloads, or other folders
+without a file-picker action.
 
-To learn more about Next.js, take a look at the following resources:
+## Commands
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Command | Purpose |
+| --- | --- |
+| `npm run dev:all` | Start signaling and Next.js together |
+| `npm run dev` | Start only the Next.js development server |
+| `npm run signal` | Start only the WebSocket signaling server |
+| `npm run typecheck` | Type-check the frontend and signaling server |
+| `npm run lint` | Run ESLint |
+| `npm run build` | Create a production Next.js build |
+| `npm run start` | Start the production Next.js server |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Configuration
 
-## Deploy on Vercel
+Copy `.env.example` to `.env.local` for local overrides. The important
+frontend setting is:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```dotenv
+NEXT_PUBLIC_SIGNALING_URL=ws://localhost:8080
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-# ShareGo
+For a deployed frontend, use the public WebSocket endpoint:
+
+```dotenv
+NEXT_PUBLIC_SIGNALING_URL=wss://signaling.example.com
+```
+
+`NEXT_PUBLIC_*` values are embedded at build time, so rebuild or restart the
+Next.js process after changing them. The server-side settings
+`SIGNALING_HOST` and `SIGNALING_PORT` control where the standalone signaling
+process listens.
+
+## Deployment
+
+The frontend and signaling server are separate deployments:
+
+1. Deploy the Next.js application to Vercel or another platform that supports
+   Next.js.
+2. Deploy `npm run signal` to a long-running Node.js service with persistent
+   WebSocket support. A normal Vercel request function is not a replacement for
+   this process.
+3. Set `NEXT_PUBLIC_SIGNALING_URL` to the signaling service's `wss://` URL
+   before building the frontend.
+4. Configure the signaling service's host, port, TLS termination, and network
+   firewall according to the hosting provider.
+
+The included signaling server keeps presence in memory only. Restarting it
+disconnects all devices and clears the roster.
+
+## How the connection works
+
+1. Each browser opens a WebSocket and announces a display name and device type.
+2. The server broadcasts the current online-device roster.
+3. A user sends a connection request; the recipient must explicitly accept it.
+4. The requesting browser creates the WebRTC offer. The peers exchange the
+   offer, answer, and ICE candidates through the signaling server.
+5. Two reliable DataChannels carry control messages and chunked file frames.
+6. Only explicitly selected files are eligible to be requested by a peer.
+
+Transfers use bounded chunks and DataChannel backpressure. Downloads are
+assembled into a Blob and saved by the browser. Image, audio, and video
+previews use a progressive MediaSource path where supported, with a complete
+Blob fallback where it is not.
+
+## Browser and network limitations
+
+- The browser sandbox requires explicit file selection.
+- DataChannels are not HTTP streams and do not provide native Range requests.
+- Some video containers can only start after the entire file arrives, especially
+  when the container index is at the end of the file.
+- Very large previews may require substantial browser memory.
+- WebRTC may fail across restrictive NATs or firewalls. The default STUN
+  configuration helps discover routes, but production deployments may also
+  need a TURN relay configured through `NEXT_PUBLIC_ICE_SERVERS`.
+- Signaling presence is not Wi-Fi scanning; it only includes browsers connected
+  to the same signaling endpoint.
+
+## Manual verification checklist
+
+Use two browser windows or two physical devices to verify:
+
+- Both devices appear and disappear from **Nearby devices** as sockets connect
+  and disconnect.
+- Connection request, explicit accept, reject, timeout, and disconnect states.
+- WebRTC connection reaches **Connected** before file actions are enabled.
+- Image, video, audio, and document metadata appears remotely.
+- Small and large chunked downloads show progress and speed.
+- Preview transfers retrieve bytes from the remote peer and release object URLs
+  when closed.
+- Adding or removing a shared file refreshes the remote file list.
