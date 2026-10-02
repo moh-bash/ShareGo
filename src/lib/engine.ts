@@ -1,5 +1,5 @@
 /**
- * The ShareGo engine: one plain object that owns the signaling socket, every
+ * The ShareGo engine: one plain object that owns the signaling connection, every
  * peer connection, the shared file list, transfers and notifications.
  *
  * Why not React state for all of this? Progress ticks 4-10x/second per file and
@@ -11,14 +11,14 @@
  */
 
 import { ArtifactStore, ToastStore } from "@/lib/app-store";
-import { resolveSignalingUrl, saveSignalingUrl } from "@/lib/config";
+import { clearSignalingUrl, resolveSignalingUrl, saveSignalingUrl } from "@/lib/config";
 import { TransferEngine } from "@/lib/file-transfer/engine";
 import { SharedFileStore } from "@/lib/file-transfer/shared-file-store";
 import { TransferStore } from "@/lib/file-transfer/transfer-store";
 import { detectDeviceType } from "@/lib/utils/device";
 import { guessDeviceName } from "@/lib/utils/id";
 import { PeerManager } from "@/lib/webrtc/peer-manager";
-import { SignalingClient } from "@/lib/websocket/client";
+import { SignalingClient } from "@/lib/signaling/client";
 import type { ToastMessage, TransferPurpose } from "@/types/files";
 import type { DeviceInfo, DeviceType, SignalingStatus } from "@/types/signaling";
 import type { IncomingRequestSnapshot, PeerSnapshot, SharedFileMetaLite } from "@/types/webrtc";
@@ -205,7 +205,7 @@ export class ShareGoEngine {
   /* Identity + lifecycle                                             */
   /* ---------------------------------------------------------------- */
 
-  /** Read persisted identity and open the signaling socket. */
+  /** Read persisted identity and connect to the signaling endpoint. */
   start(): void {
     if (typeof window === "undefined") return;
     if (this.signaling) return;
@@ -213,16 +213,16 @@ export class ShareGoEngine {
     this.deviceType = detectDeviceType();
     this.deviceName = readStoredName() ?? guessDeviceName();
     const signalingUrl = resolveSignalingUrl();
+    this.signalingUrl = signalingUrl ?? "";
     if (!signalingUrl) {
       this.signalingStatus = "offline";
       this.appendLog(
         "warn",
-        "No signaling server is configured. Set NEXT_PUBLIC_SIGNALING_URL or open ShareGo from a supported HTTP(S) origin.",
+        "No signaling endpoint is configured. Open ShareGo over http:// or https:// so the built-in signaling route can be used.",
       );
       this.invalidate();
       return;
     }
-    this.signalingUrl = signalingUrl;
 
     const signaling = new SignalingClient({
       url: this.signalingUrl,
@@ -284,11 +284,20 @@ export class ShareGoEngine {
     if (next.length === 0 || next === this.signalingUrl) return;
 
     saveSignalingUrl(next);
-    this.signalingUrl = next;
+    this.reconnectToSignaling();
+  }
+
+  /** Forget any user override and go back to same-origin / the environment. */
+  resetSignalingUrl(): void {
+    clearSignalingUrl();
+    this.reconnectToSignaling();
+  }
+
+  private reconnectToSignaling(): void {
     this.signaling?.dispose();
     this.signaling = null;
     this.deviceId = null;
-    this.peerManager.resetAll("The signaling server address changed.");
+    this.peerManager.resetAll("The signaling endpoint changed.");
     this.start();
   }
 
@@ -344,10 +353,22 @@ export class ShareGoEngine {
     this.invalidate();
   }
 
-  /** Ask a connected device to send one of its shared files. */
-  requestFile(peerId: string, meta: SharedFileMetaLite, purpose: TransferPurpose): string | null {
+  /**
+   * Ask a connected device to send one of its shared files.
+   *
+   * `disposeAfterSave` is for downloads nothing will look at again (the remote
+   * browser's Download button): the bytes go to the download manager and the
+   * artifact is dropped. A preview dialog leaves it off so it can still offer
+   * "Save again".
+   */
+  requestFile(
+    peerId: string,
+    meta: SharedFileMetaLite,
+    purpose: TransferPurpose,
+    options?: { disposeAfterSave?: boolean },
+  ): string | null {
     try {
-      const artifactId = this.transferEngine.requestFile(peerId, meta, purpose);
+      const artifactId = this.transferEngine.requestFile(peerId, meta, purpose, options);
       this.appendLog("info", `Requested "${meta.name}".`);
       return artifactId;
     } catch (error) {

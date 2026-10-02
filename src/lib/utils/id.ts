@@ -22,12 +22,19 @@ export function newFileId(): string {
   return `f_${randomId(16)}`;
 }
 
-/** Monotonic-ish counter used for `transferId`. */
+/**
+ * Monotonic-ish counter used for `transferId`.
+ *
+ * Returns `start` first: the previous version incremented before returning, so
+ * a counter created with `createCounter(1)` handed out `2` and silently skipped
+ * an id.
+ */
 export function createCounter(start = 1): () => number {
   let value = start;
   return () => {
+    const current = value;
     value += 1;
-    return value;
+    return current;
   };
 }
 

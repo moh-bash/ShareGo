@@ -9,7 +9,7 @@
  * Full-screen on phones, centred card from `sm` up.
  */
 
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, type ReactNode } from "react";
 import { CloseIcon } from "./icons";
 
 export interface ModalProps {
@@ -45,12 +45,15 @@ export function Modal({
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  const titleId = useId();
 
   useEffect(() => {
     if (!open) return;
 
     previouslyFocused.current = document.activeElement as HTMLElement | null;
-    const { overflow } = document.body.style;
+    // Remember (and later restore) rather than assigning: two stacked dialogs
+    // would otherwise restore `overflow: hidden` instead of the real value.
+    const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
     // Move focus into the dialog so keyboard and screen reader users land here.
@@ -63,7 +66,7 @@ export function Modal({
 
     return () => {
       window.clearTimeout(timer);
-      document.body.style.overflow = overflow;
+      document.body.style.overflow = previousOverflow;
       previouslyFocused.current?.focus?.();
     };
   }, [open]);
@@ -73,6 +76,38 @@ export function Modal({
       if (event.key === "Escape") {
         event.stopPropagation();
         onClose();
+        return;
+      }
+
+      // Without this, Tab walks straight out of the dialog into the page
+      // behind it, which is still visible and still focusable.
+      if (event.key !== "Tab") return;
+
+      const panel = panelRef.current;
+      if (!panel) return;
+
+      const focusable = [
+        ...panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((element) => element.offsetParent !== null || element === document.activeElement);
+
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || active === panel)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     },
     [onClose],
@@ -97,12 +132,15 @@ export function Modal({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
         tabIndex={-1}
         className={`panel animate-rise relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-b-none shadow-2xl shadow-black/60 outline-none sm:rounded-b-[var(--radius-card)] ${SIZES[size]}`}
       >
         <div className="flex items-start gap-4 border-b border-hairline px-5 py-4">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-lg font-semibold text-ink">{title}</h2>
+            <h2 id={titleId} className="truncate text-lg font-semibold text-ink">
+              {title}
+            </h2>
             {description ? (
               <p className="mt-0.5 text-sm text-ink-muted">{description}</p>
             ) : null}

@@ -186,7 +186,7 @@ export class PeerManager {
   private handleIncomingRequest(message: {
     from: DeviceInfo;
     requestId: string;
-    expiresAt: number;
+    expiresInMs: number;
   }): void {
     // One dialog per device: a second request replaces the first.
     for (const [requestId, entry] of [...this.incomingRequests]) {
@@ -196,20 +196,26 @@ export class PeerManager {
       this.events.onRequestRemoved(requestId);
     }
 
+    // The server sends a *duration*, never an absolute deadline: the two devices
+    // rarely agree on the wall clock, and a skewed clock would either expire the
+    // dialog instantly or leave it open forever.
+    const receivedAt = Date.now();
+    const expiresAt = receivedAt + message.expiresInMs;
+
     const request: IncomingRequestSnapshot = {
       requestId: message.requestId,
       deviceId: message.from.deviceId,
       deviceName: message.from.deviceName,
       deviceType: message.from.deviceType,
-      receivedAt: Date.now(),
-      expiresAt: message.expiresAt,
+      receivedAt,
+      expiresAt,
     };
 
     const timer = setTimeout(() => {
       this.incomingRequests.delete(message.requestId);
       this.events.onRequestRemoved(message.requestId);
       this.events.onLog("A connection request expired before it was answered.");
-    }, Math.max(0, message.expiresAt - Date.now()));
+    }, Math.max(0, expiresAt - receivedAt));
 
     this.incomingRequests.set(message.requestId, { request, timer });
     this.events.onIncomingRequest(request);
@@ -304,7 +310,7 @@ export class PeerManager {
     this.events.onLog(`Disconnected from ${device?.deviceName ?? "device"}.`);
   }
 
-  /** Called when the WebSocket drops: everything peer related is invalid. */
+  /** Called when the signaling session is replaced: everything peer related is invalid. */
   resetAll(reason: string): void {
     for (const pending of this.outgoingRequests.values()) clearTimeout(pending.timer);
     this.outgoingRequests.clear();

@@ -9,6 +9,15 @@
  *
  * Splitting them matters: a 64 KB binary frame cannot head-of-line block a
  * "cancel" or "file-list" request, because they travel on different channels.
+ *
+ * The cost of splitting them is easy to forget: **two channels are two
+ * independent ordered streams with no ordering between them.** `transfer-done`
+ * rides the control channel while the payload rides the file channel, so it
+ * routinely overtakes bytes the sender has already queued — and always does when
+ * the sender is pushing fast enough to have a backlog. A receiver that treats
+ * `transfer-done` as "the bytes are all here" fails large transfers at whatever
+ * power-of-two boundary the backlog sat at. `ChunkReceiver.complete()` therefore
+ * treats it as a byte count to wait for, never as proof of arrival.
  */
 
 import type { FileCategory } from "./files";

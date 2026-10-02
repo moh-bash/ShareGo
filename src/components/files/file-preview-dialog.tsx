@@ -47,8 +47,13 @@ function kindOf(meta: SharedFileMetaLite): PreviewKind {
 export interface FilePreviewDialogProps {
   meta: SharedFileMetaLite | null;
   peerId: string;
-  /** Starts a transfer for this file and returns the artifact id, or null. */
-  startTransfer: (meta: SharedFileMetaLite, purpose: "preview" | "download") => string | null;
+  /** Starts a transfer and returns the artifact id, or null. */
+  startTransfer: (
+    peerId: string,
+    meta: SharedFileMetaLite,
+    purpose: "preview" | "download",
+    options?: { disposeAfterSave?: boolean },
+  ) => string | null;
   onClose: () => void;
 }
 
@@ -58,28 +63,43 @@ export function FilePreviewDialog({
   startTransfer,
   onClose,
 }: FilePreviewDialogProps) {
-  const { release } = useTransferActions();
+  const { release, save } = useTransferActions();
 
   // Starting the stream is a side effect on an external system (the transfer
   // engine), so it belongs in an effect. What the UI renders is then *derived*
   // from the artifact store, which means no mirrored `artifactId` state that
   // could disagree with the engine after a reconnect or an error.
+  //
+  // Only formats with an inline renderer are streamed. For a PDF or a ZIP there
+  // is nothing to display until the whole file is on disk, so pulling it over
+  // the DataChannel would move bytes for a blank dialog.
+  const kind = meta ? kindOf(meta) : "document";
+  const previewable = kind !== "document";
+
   useEffect(() => {
-    if (!meta) return;
-    startTransfer(meta, "preview");
-  }, [meta, startTransfer]);
+    if (!meta || !previewable) return;
+    startTransfer(peerId, meta, "preview");
+  }, [meta, peerId, previewable, startTransfer]);
 
   const artifact = usePreviewArtifact(peerId, meta?.fileId ?? null);
   const artifactId = artifact?.id ?? null;
   const download = useDownloadArtifact(peerId, meta?.fileId ?? null);
-  const kind = meta ? kindOf(meta) : "document";
+  const downloadInFlight = download?.status === "pending" || download?.status === "streaming";
+  const downloadReady = download?.status === "complete" && download.url !== null;
 
-  // Free the received bytes when the preview closes.
+  // Free the received bytes when the preview closes. Releasing an artifact that
+  // is still streaming cancels the transfer, so this is also the "stop" path.
+  //
+  // Both artifacts are released, not just the previewed one: the Download button
+  // in this dialog keeps its own copy around so "Save again" works, and that
+  // copy is a full Blob in memory too.
+  const downloadId = download?.id ?? null;
   useEffect(() => {
     return () => {
       if (artifactId) release(artifactId);
+      if (downloadId) release(downloadId);
     };
-  }, [artifactId, release]);
+  }, [artifactId, downloadId, release]);
 
   if (!meta) return null;
 
@@ -95,10 +115,13 @@ export function FilePreviewDialog({
           variant="primary"
           size="sm"
           icon={<DownloadIcon className="size-4" />}
-          disabled={download !== undefined && download.status !== "complete"}
-          onClick={() => startTransfer(meta, "download")}
+          disabled={downloadInFlight}
+          onClick={() => {
+            if (downloadReady) save(download.id);
+            else startTransfer(peerId, meta, "download");
+          }}
         >
-          Download
+          {downloadReady ? "Save again" : downloadInFlight ? "Downloading…" : "Download"}
         </Button>
       }
       footer={<PreviewFooter artifact={artifact} download={download} />}
@@ -190,6 +213,9 @@ function PreviewBody({
           src={url}
           controls
           autoPlay
+          // Browsers block unmuted autoplay, so an unmuted `autoPlay` would
+          // silently do nothing. Muted starts reliably; the user unmutes.
+          muted
           playsInline
           className="max-h-[60dvh] w-auto max-w-full rounded-lg"
         />
@@ -199,7 +225,7 @@ function PreviewBody({
 
   return (
     <div className="grid place-items-center bg-black/25 px-6 py-12">
-      <audio key={url} src={url} controls autoPlay className="w-full max-w-xl" />
+      <audio key={url} src={url} controls autoPlay muted className="w-full max-w-xl" />
     </div>
   );
 }
@@ -221,19 +247,21 @@ function PreviewFooter({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="min-w-[12rem] flex-1">
-        <ProgressBar
-          value={progress}
-          label={done ? "Preview ready" : "Receiving preview"}
-          trailing={
-            artifact
-              ? `${formatBytes(artifact.bytesReceived)} / ${formatBytes(artifact.size)}`
-              : undefined
-          }
-          tone={done ? "positive" : "accent"}
-          indeterminate={artifact?.status === "pending"}
-        />
-      </div>
+      {artifact ? (
+        <div className="min-w-[12rem] flex-1">
+          <ProgressBar
+            value={progress}
+            label={done ? "Preview ready" : "Receiving preview"}
+            trailing={`${formatBytes(artifact.bytesReceived)} / ${formatBytes(artifact.size)}`}
+            tone={done ? "positive" : "accent"}
+            indeterminate={artifact.status === "pending"}
+          />
+        </div>
+      ) : (
+        <p className="min-w-[12rem] flex-1 text-[11px] text-ink-faint">
+          Nothing is being transferred — this format has no inline preview.
+        </p>
+      )}
 
       {download && download.status === "complete" ? (
         <Button

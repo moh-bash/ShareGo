@@ -12,7 +12,7 @@
  *    squeezed version of the desktop grid.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AppHeader } from "@/components/layout/app-header";
 import { ConnectionRequestDialog } from "@/components/connection/connection-request-dialog";
 import { SettingsSheet } from "@/components/connection/settings-sheet";
@@ -35,6 +35,12 @@ import type { SharedFileMetaLite } from "@/types/webrtc";
 
 type MobileTab = "devices" | "files" | "transfers";
 
+/** A preview is pinned to the peer it came from, not to "whoever is connected". */
+interface PreviewRequest {
+  peerId: string;
+  meta: SharedFileMetaLite;
+}
+
 export function ShareGoApp() {
   const engine = useEngine();
   const { peers, identity } = useEngineSnapshot();
@@ -42,13 +48,22 @@ export function ShareGoApp() {
   const toasts = useToasts();
 
   const [tab, setTab] = useState<MobileTab>("devices");
-  const [preview, setPreview] = useState<SharedFileMetaLite | null>(null);
+  const [preview, setPreview] = useState<PreviewRequest | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null);
 
-  const connectedPeer = useMemo(
-    () => Object.values(peers).find((peer) => peer.state === "connected") ?? null,
+  const connectedPeers = useMemo(
+    () => Object.values(peers).filter((peer) => peer.state === "connected"),
     [peers],
   );
+
+  // Falls back to the first connected peer so a disconnect (or the first
+  // connection) still renders something sensible without an effect.
+  const connectedPeer = useMemo(() => {
+    const chosen = connectedPeers.find((peer) => peer.deviceId === selectedPeerId);
+    return chosen ?? connectedPeers[0] ?? null;
+  }, [connectedPeers, selectedPeerId]);
+
   const pendingPeer = useMemo(
     () =>
       Object.values(peers).find(
@@ -61,13 +76,27 @@ export function ShareGoApp() {
     (item) => item.status === "streaming" || item.status === "pending",
   ).length;
 
-  function startTransfer(meta: SharedFileMetaLite, purpose: "preview" | "download") {
-    if (!connectedPeer) {
-      engine.notify({ tone: "error", title: "No connected device to fetch that file from." });
-      return null;
-    }
-    return engine.requestFile(connectedPeer.deviceId, meta, purpose);
-  }
+  // `useCallback` matters more than it looks: `FilePreviewDialog` starts its
+  // transfer from an effect keyed on this function, so a per-render literal
+  // would restart the transfer on every progress tick — an endless request loop.
+  const startTransfer = useCallback(
+    (
+      peerId: string,
+      meta: SharedFileMetaLite,
+      purpose: "preview" | "download",
+      options?: { disposeAfterSave?: boolean },
+    ) => {
+      if (!peerId) {
+        engine.notify({
+          tone: "error",
+          title: "No connected device to fetch that file from.",
+        });
+        return null;
+      }
+      return engine.requestFile(peerId, meta, purpose, options);
+    },
+    [engine],
+  );
 
   return (
     <div className="relative flex min-h-dvh flex-col">
@@ -79,7 +108,7 @@ export function ShareGoApp() {
         <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] lg:items-start">
           {/* ---------------- Left column ---------------- */}
           <div className="space-y-4">
-            <div className={panelVisibility(tab, "devices", "block")}>
+            <div className={panelVisibility(tab, "devices")}>
               <section className="panel p-4 sm:p-5" aria-labelledby="devices-heading">
                 <header className="mb-3 flex items-baseline justify-between gap-3">
                   <h2 id="devices-heading" className="text-sm font-semibold text-ink">
@@ -91,11 +120,11 @@ export function ShareGoApp() {
               </section>
             </div>
 
-            <div className={panelVisibility(tab, "files", "block")}>
+            <div className={panelVisibility(tab, "files")}>
               <MyFilesPanel />
             </div>
 
-            <div className={panelVisibility(tab, "transfers", "hidden lg:block")}>
+            <div className={panelVisibility(tab, "transfers")}>
               <section className="panel overflow-hidden" aria-labelledby="transfers-heading">
                 <span id="transfers-heading" className="sr-only">
                   Transfers
@@ -106,7 +135,7 @@ export function ShareGoApp() {
           </div>
 
           {/* ---------------- Right column ---------------- */}
-          <div className={panelVisibility(tab, "devices", "block")}>
+          <div className={panelVisibility(tab, "devices")}>
             <section className="panel min-h-[24rem] overflow-hidden" aria-label="Shared files from the connected device">
               {connectedPeer ? (
                 <>
@@ -121,14 +150,36 @@ export function ShareGoApp() {
                         Connected directly · encrypted
                       </p>
                     </div>
+                    {connectedPeers.length > 1 ? (
+                      <label className="flex items-center gap-2 text-xs text-ink-faint">
+                        Browsing
+                        <select
+                          value={connectedPeer.deviceId}
+                          onChange={(event) => setSelectedPeerId(event.target.value)}
+                          className="focus-ring h-9 max-w-[11rem] truncate rounded-lg border border-hairline bg-surface-2 px-2 text-xs text-ink"
+                        >
+                          {connectedPeers.map((peer) => (
+                            <option key={peer.deviceId} value={peer.deviceId}>
+                              {peer.deviceName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                   </header>
 
                   <RemoteBrowser
                     peerId={connectedPeer.deviceId}
-                    onPreview={setPreview}
+                    onPreview={(meta) =>
+                      setPreview({ peerId: connectedPeer.deviceId, meta })
+                    }
                     onDownload={(meta) => {
                       setTab("transfers");
-                      startTransfer(meta, "download");
+                      // Nothing will come back to this one: the download is
+                      // auto-saved and there is no dialog to offer "Save again".
+                      startTransfer(connectedPeer.deviceId, meta, "download", {
+                        disposeAfterSave: true,
+                      });
                     }}
                   />
                 </>
@@ -176,8 +227,8 @@ export function ShareGoApp() {
       <ToastRegion toasts={toasts} onDismiss={(id) => engine.dismissToast(id)} />
 
       <FilePreviewDialog
-        meta={preview}
-        peerId={connectedPeer?.deviceId ?? ""}
+        meta={preview?.meta ?? null}
+        peerId={preview?.peerId ?? ""}
         startTransfer={startTransfer}
         onClose={() => setPreview(null)}
       />
@@ -189,9 +240,16 @@ export function ShareGoApp() {
 /* Pieces                                                              */
 /* ------------------------------------------------------------------ */
 
-function panelVisibility(active: MobileTab, tab: MobileTab, desktop: string): string {
-  // On mobile only the selected tab is shown; on desktop everything is.
-  return `${desktop} ${active === tab ? "block" : "hidden"}`;
+/**
+ * `hidden` and `block` are both plain `display` utilities, so whichever the
+ * stylesheet emits last wins no matter what order they appear in the class
+ * attribute. Everything therefore keys off `lg:block` (a variant, emitted after
+ * the base layer) plus a bare `hidden` for the panels the current mobile tab has
+ * parked. That yields: all three panels at `lg` and up, only the selected one
+ * below it.
+ */
+function panelVisibility(active: MobileTab, tab: MobileTab): string {
+  return `lg:block${active === tab ? "" : " hidden"}`;
 }
 
 function TabButton({

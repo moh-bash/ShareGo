@@ -106,6 +106,7 @@ class MediaSourceSinkImpl implements MediaSourceSink {
     this.sourceBuffer.addEventListener("updateend", () => {
       this.flushQueue();
       this.maybeNotifyReady();
+      this.finishIfDrained();
     });
     this.sourceBuffer.addEventListener("error", () => {
       this.onError?.("This browser could not play the incoming media stream.");
@@ -121,7 +122,7 @@ class MediaSourceSinkImpl implements MediaSourceSink {
   }
 
   write(chunk: Uint8Array<ArrayBuffer>): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.ended) return;
     this.bytesAppended += chunk.byteLength;
 
     if (this.mediaSource.readyState !== "open" || this.sourceBuffer.updating) {
@@ -137,26 +138,38 @@ class MediaSourceSinkImpl implements MediaSourceSink {
     if (this.destroyed || this.ended) return;
     this.ended = true;
     this.flushQueue();
-    if (this.mediaSource.readyState === "open") {
-      // Wait for pending appends, otherwise the browser throws InvalidState.
-      const finish = () => {
-        if (this.mediaSource.readyState === "open") {
-          this.mediaSource.endOfStream();
-        }
-      };
-      if (this.sourceBuffer.updating) {
-        this.sourceBuffer.addEventListener("updateend", finish, { once: true });
-      } else {
-        finish();
-      }
+    this.finishIfDrained();
+  }
+
+  /**
+   * Close the stream, but only once every queued chunk has actually been
+   * appended. Calling `endOfStream()` while appends are outstanding makes the
+   * player treat a truncated file as complete, and calling it while the
+   * SourceBuffer is updating throws `InvalidStateError`.
+   */
+  private finishIfDrained(): void {
+    if (this.destroyed || !this.ended) return;
+    if (this.mediaSource.readyState !== "open") return;
+    if (this.sourceBuffer.updating) return;
+
+    if (this.queue.length > 0) {
+      this.flushQueue();
+      return;
+    }
+
+    try {
+      this.mediaSource.endOfStream();
+    } catch {
+      // Another `endOfStream()` already won the race; nothing left to do.
     }
   }
 
   abort(reason: string): void {
     if (this.destroyed) return;
+    this.ended = true;
+    this.queue = [];
     try {
       if (this.sourceBuffer.updating) this.sourceBuffer.abort();
-      if (this.mediaSource.readyState === "open") this.mediaSource.endOfStream();
     } catch {
       // The MediaSource may already be torn down; nothing useful to do.
     }

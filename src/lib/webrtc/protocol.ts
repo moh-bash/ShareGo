@@ -8,7 +8,7 @@
 
 import type { ControlMessage, SharedFileMetaLite, TransferErrorCode } from "@/types/webrtc";
 import { coerceFileCategory } from "@/lib/utils/format";
-import { isRecord } from "@/lib/websocket/protocol";
+import { isRecord } from "@/lib/signaling/protocol";
 
 export const CONTROL_LIMITS = {
   /** A file list is capped so a peer cannot stall us with 100k entries. */

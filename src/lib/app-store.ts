@@ -53,22 +53,6 @@ export class ArtifactStore {
     return this.artifacts.get(id);
   }
 
-  /** Most recent artifact for a (peer, file, purpose) triple. */
-  findByFile(
-    peerId: string,
-    fileId: string,
-    purpose: TransferPurpose,
-  ): Artifact | undefined {
-    let match: Artifact | undefined;
-    for (const artifact of this.artifacts.values()) {
-      if (artifact.peerId !== peerId) continue;
-      if (artifact.fileId !== fileId) continue;
-      if (artifact.purpose !== purpose) continue;
-      if (!match || match.bytesReceived > 0) match = artifact;
-    }
-    return match;
-  }
-
   set(
     id: string,
     artifact: Artifact,
@@ -95,13 +79,6 @@ export class ArtifactStore {
     }
     this.artifacts.delete(id);
     this.publish();
-  }
-
-  releasePeer(peerId: string): void {
-    for (const [id, artifact] of [...this.artifacts]) {
-      if (artifact.peerId !== peerId) continue;
-      this.release(id);
-    }
   }
 
   clear(): void {

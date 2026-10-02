@@ -11,18 +11,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 ## What this is
 
 ShareGo moves files between devices on the same network. The browser app is a thin
-client: a WebSocket server only introduces peers, and **all file bytes travel
+client: the signaling endpoint only introduces peers, and **all file bytes travel
 directly over WebRTC DataChannels**. Nothing is uploaded, stored, or persisted.
 
 ## Commands
 
-- `npm run dev:all` — the only command you usually want: runs the signaling server
-  and `next dev` together with prefixed output (`scripts/dev-all.mjs`).
-- `npm run signal` — signaling server only (`tsx signaling/server.ts`, port 8080,
-  prints both `localhost` and LAN URLs on boot).
-- `npm run dev` / `build` / `start` — plain Next.js.
-- `npm run typecheck` — `tsc --noEmit`. Covers `signaling/` too (tsconfig includes
-  `**/*.ts`).
+- `npm run dev` / `build` / `start` — plain Next.js. There is no second process:
+  signaling is a route inside the app.
+- `npm run typecheck` — `tsc --noEmit` over the whole repo.
 - `npm run lint` — bare `eslint` over the whole repo. There is **no** `next lint`,
   and `next lint --dir` does not exist in this version.
 
@@ -34,24 +30,56 @@ expectation. End-to-end behaviour is verified manually with two browser windows
 ## Layout
 
 - `src/lib/` — framework-agnostic core, no React imports. `engine.ts` is the app
-  singleton; `webrtc/` owns connections; `file-transfer/` owns bytes.
+  singleton; `signaling/` owns peer introduction; `webrtc/` owns connections;
+  `file-transfer/` owns bytes.
+- `src/app/api/signal/route.ts` — the signaling endpoint: `GET` is a
+  `text/event-stream`, `POST` carries one client message upstream.
+- `src/lib/signaling/hub.ts` — roster + relay, shared by every instance that
+  hosts a stream.
 - `src/components/`, `src/hooks/` — the only React layer.
-- `signaling/server.ts` — standalone Node `ws` server, run via `tsx`, reuses the
-  browser's validator from `src/lib/websocket/protocol.ts` so both sides agree.
 - `src/app/` — App Router. The whole page is client-side; `layout.tsx` owns
   metadata/fonts and mounts the provider.
+
+## The signaling transport
+
+`GET /api/signal?session=…&name=…&type=…` holds an event stream open;
+`POST /api/signal` sends `{ session, message }` upstream. This replaced a
+WebSocket server because a long-lived socket does not survive a serverless
+platform in any predictable way, whereas a bounded HTTP response degrades into a
+reconnect that *resumes* the same `deviceId` (the session token in the URL is
+minted by the server in `welcome`).
+
+Consequences worth knowing before you touch it:
+
+- **Identity is server-minted.** `deviceId` is never accepted from a client; the
+  session token is a bearer secret stored in `localStorage`, per endpoint, by
+  `src/lib/config.ts`. `from` on every relayed message is stamped server-side.
+- **A signaling blip does not tear down peers.** `SignalingClient.onReset` fires
+  only when a `welcome` carries a *different* `deviceId`; established
+  DataChannels are unaffected by a dropped stream.
+- **`MemoryDirectory` vs `RedisDirectory`.** Without `UPSTASH_REDIS_REST_URL` /
+  `UPSTASH_REDIS_REST_TOKEN` the hub keeps state in the process, which is right
+  for `next dev` and wrong for a multi-instance deployment. The client is told
+  via `welcome.config.sharedDirectory` and warns the user. Do not make this
+  failure mode silent.
+- Deadlines cross the wire as **durations**, never absolute timestamps: two
+  devices rarely share a wall clock.
 
 ## Architecture rules that are easy to break
 
 - **One engine per tab.** `ShareGoProvider` creates it with
   `useState(() => new ShareGoEngine())` and disposes it on unmount. Do not move it
-  to a module singleton or a ref — sockets and peer connections would outlive the
+  to a module singleton or a ref — streams and peer connections would outlive the
   page. All state changes go through the stores; UI reads them via
   `useSyncExternalStore` hooks in `src/hooks/use-share-go.ts`.
+- **The hub is a `globalThis` singleton**, deliberately: `next dev`'s hot reload
+  would otherwise leave a second roster behind and two windows could stop seeing
+  each other after an edit.
 - **Never trust a peer-supplied string.** Control messages are parsed and length
   limited in `src/lib/webrtc/protocol.ts`; `category` in particular is recomputed
-  locally rather than accepted. Keep validation at the wire boundary, not in
-  components.
+  locally rather than accepted. Signaling messages are parsed in *both*
+  directions by `src/lib/signaling/protocol.ts`, shared with the route handler so
+  both sides agree. Keep validation at the wire boundary, not in components.
 - **`SharedFileMetaLite` is a subset of `SharedFileMeta`** — never include the
   `File` handle on the wire.
 - **Object URLs are owned by `ArtifactStore`** and must be released
@@ -68,16 +96,13 @@ expectation. End-to-end behaviour is verified manually with two browser windows
 
 - `.env.example` documents every variable; **all are optional**. `NEXT_PUBLIC_*`
   values are inlined at build time, so changing one needs a dev-server restart.
-- **`.env.example` is gitignored** by the `.env*` rule in `.gitignore`. It exists
-  locally but will not be committed until that rule is negated (`!.env.example`).
-  Fix that before relying on it for onboarding anyone else.
-- The browser derives the signaling URL from `window.location` (port 8080 unless
-  the page is on 3000/3001), so LAN testing usually needs no config. A user-typed
-  URL in Settings overrides it and persists in `localStorage`
-  (`src/lib/config.ts`).
+- `.env.example` **is** committed (the `.gitignore` negates `.env*`).
+- The browser defaults the signaling endpoint to its own origin
+  (`/api/signal`), so LAN testing usually needs no config. A user-typed URL in
+  Settings overrides it and persists in `localStorage`
+  (`src/lib/config.ts`); "Use default" clears it.
 - **Second-device testing is the main stumbling block**: the phone must dial the
-  dev machine's LAN address, not `localhost`. The signaling server prints the exact
-  URLs at startup.
+  dev machine's LAN address, not `localhost` — e.g. `http://192.168.1.20:3000`.
 
 ## Manual end-to-end check
 
@@ -85,6 +110,9 @@ Two windows, same machine: window A adds files → window B sends a connection
 request → A accepts → B sees A's files without asking → download/preview → verify
 progress and the settings activity log. Two tabs in one browser work because ICE
 host candidates are used.
+
+The signaling endpoint can also be exercised without a browser: open the event
+stream with `curl -N` and post a message with `curl -X POST`.
 
 ## Style rules the linter enforces here
 
@@ -99,6 +127,10 @@ host candidates are used.
 - For "reset state when a prop changes", unmount the child (render `null` when
   closed, e.g. `SettingsSheet`) so its `useState` initializer re-runs, instead of
   syncing with an effect.
+- **Anything a component passes into an effect's dependency array must be
+  stable.** A function literal recreated per render retriggers the effect on
+  every store update — which is how a preview ended up requesting its file in a
+  loop.
 
 ## Environment gotcha (this machine)
 
@@ -111,7 +143,8 @@ reports ~13 MB and every load fails with "not a valid Win32 application".
 
 ## Known gaps
 
-- `README.md` is still the create-next-app boilerplate and does **not** describe
-  this app — trust this file and the code instead.
 - `npm run lint`, `npm run typecheck` and `npm run build` pass; the two-peer
   WebRTC flow has not been exercised by an automated test.
+- `RedisDirectory` is the one path with no automated coverage and no credentials
+  available locally. Its logic is deliberately thin, but treat changes to it as
+  unverified until a deployment with `UPSTASH_REDIS_*` set has been exercised.
