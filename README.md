@@ -11,14 +11,27 @@ browser to the other.
 
 ![ShareGo Logo](https://github.com/moh-bash/ShareGo/blob/main/public/cover.webp?raw=true)
 
-## Requirements
+## 📦 Tech Stack
+
+| Technology | Purpose |
+| --- | --- |
+| [Next.js 16](https://nextjs.org/) | Full-stack React framework and application routing |
+| [React 19](https://react.dev/) | Client-side user interface |
+| [TypeScript](https://www.typescriptlang.org/) | Type-safe application and server code |
+| [Tailwind CSS 4](https://tailwindcss.com/) | UI styling and responsive layouts |
+| WebRTC DataChannels | Direct peer-to-peer file and control-data transfers |
+| Server-Sent Events (SSE) | Signaling stream between browsers and the app |
+| [Upstash Redis](https://upstash.com/) | Optional shared signaling state for multi-instance deployments |
+| ESLint | Static analysis and React Compiler checks |
+
+## 📋 Requirements
 
 - Node.js 20 or newer
 - A modern browser with WebRTC DataChannel support
 - Network access between the browsers
 - Optionally an Upstash Redis database, but only for multi-instance deployments
 
-## Local development
+## 🚀 Local development
 
 ```bash
 npm install
@@ -43,7 +56,7 @@ The browser sandbox means ShareGo can only access files the user explicitly
 selects. It cannot enumerate `C:\`, `Users`, Downloads or other folders without a
 file-picker action.
 
-## Commands
+## 📋 Commands
 
 | Command | Purpose |
 | --- | --- |
@@ -55,7 +68,43 @@ file-picker action.
 
 There is no test suite or test runner.
 
-## Configuration
+The recommended verification order is:
+
+```bash
+npm run typecheck
+npm run lint
+npm run build
+```
+
+## 📁 Project Structure
+
+```text
+.
+├── public/                 # Public images and static assets
+├── src/
+│   ├── app/                # Next.js App Router pages and /api/signal route
+│   ├── components/         # React UI components
+│   ├── hooks/              # React hooks for subscribing to application state
+│   ├── lib/
+│   │   ├── file-transfer/  # File metadata, chunking, transfers, and previews
+│   │   ├── signaling/      # SSE client, hub, and signaling protocol
+│   │   ├── webrtc/         # Peer connections, sessions, and WebRTC protocol
+│   │   ├── app-store.ts    # Shared application stores
+│   │   └── engine.ts       # ShareGo application engine
+│   └── types/              # Shared TypeScript types
+├── .env.example            # Optional environment variable reference
+├── CONTRIBUTING.md         # Contributor workflow and verification guide
+├── next.config.ts          # Next.js configuration
+├── package.json            # Scripts and dependencies
+└── README.md               # Project documentation
+```
+
+The browser UI is mounted by the App Router, while the framework-agnostic
+engine in `src/lib/` owns signaling, peer connections, shared files, transfers,
+and notifications. React components consume engine snapshots through hooks;
+file bytes never pass through the signaling route.
+
+## Environment variables
 
 Everything is optional; see `.env.example` for the full list. The two that
 matter:
@@ -118,6 +167,9 @@ fallback where it is not.
 
 ## Manual verification checklist
 
+For detailed contributor guidance and a complete manual verification flow, see
+[CONTRIBUTING.md](./CONTRIBUTING.md).
+
 Two windows on one machine work (ICE host candidates are used), and two physical
 devices are the real test:
 
@@ -130,3 +182,9 @@ devices are the real test:
 - Preview transfers pull bytes from the remote peer and release object URLs when
   closed.
 - Adding or removing a shared file refreshes the remote file list.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the
+development setup, repository conventions, verification commands, manual
+WebRTC checks, and pull request guidance.
