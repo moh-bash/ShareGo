@@ -7,6 +7,8 @@ import { LogoMark, SettingsIcon } from "@/components/ui/icons";
 import { DirectConnectionBadge, SignalingStatusPill } from "@/components/ui/status-pill";
 import { useEngine } from "@/components/providers/share-go-provider";
 import { useEngineSnapshot, usePeerActions, useSignaling } from "@/hooks/use-share-go";
+import Image from "next/image";
+import logo from "@/assets/logo.png";
 
 /**
  * App bar: who this device is, whether the signaling link is healthy, and a
@@ -32,17 +34,9 @@ export function AppHeader({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   return (
     <header className="sticky top-0 z-40 border-b border-hairline bg-canvas/85 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent/12 text-accent">
-            <LogoMark className="size-6" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold leading-tight tracking-tight">ShareGo</p>
-            <p className="hidden text-xs leading-tight text-ink-faint sm:block">
-              Direct file sharing on your Wi-Fi
-            </p>
-          </div>
+      <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2 sm:px-6">
+        <div className="relative">
+          <Image src={logo} alt="Logo" width={150} />
         </div>
 
         <div className="ml-auto flex items-center gap-2">

@@ -1,4 +1,5 @@
 # ShareGo
+![ShareGo Logo](https://github.com/moh-bash/ShareGo/tree/main/src/assets/logo.png)
 
 ShareGo is a browser-based local file-sharing application. Devices discover each
 other through a signaling endpoint built into the app, then transfer file
@@ -65,24 +66,6 @@ matter:
 
 `NEXT_PUBLIC_*` values are embedded at build time, so restart `next dev` after
 changing one.
-
-## Deploying to Vercel
-
-```bash
-vercel --prod
-```
-
-Then, in the deployment's environment settings:
-
-- **Required for multiple instances:** `UPSTASH_REDIS_REST_URL` and
-  `UPSTASH_REDIS_REST_TOKEN`, from the Upstash integration. Without them the
-  app is fine on a single instance and quietly limited on several.
-- **Optional:** `NEXT_PUBLIC_ICE_SERVERS` with a TURN relay, if peers have to
-  connect across restrictive NATs.
-
-No extra build settings and no `vercel.json` are needed. `/api/signal` is an
-ordinary route handler on the Node.js runtime, so it is discovered by the build
-like any page.
 
 ## How the connection works
 

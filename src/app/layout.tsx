@@ -26,6 +26,14 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
   },
   formatDetection: { telephone: false },
+  icons: [
+    {
+      rel: "icon",
+      type: "image/png",
+      sizes: "32x32",
+      url: "@/assets/logo.png",
+    }
+  ]
 };
 
 export const viewport: Viewport = {
