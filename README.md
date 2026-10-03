@@ -1,5 +1,4 @@
 # ShareGo
-![ShareGo Logo](https://github.com/moh-bash/ShareGo/tree/main/src/assets/logo.png)
 
 ShareGo is a browser-based local file-sharing application. Devices discover each
 other through a signaling endpoint built into the app, then transfer file
@@ -9,6 +8,8 @@ it.
 Nothing is uploaded, stored or proxied: the signaling endpoint only introduces
 two devices to each other and steps aside. File bytes go straight from one
 browser to the other.
+
+![ShareGo Logo](https://github.com/moh-bash/ShareGo/blob/main/public/cover.webp?raw=true)
 
 ## Requirements
 
