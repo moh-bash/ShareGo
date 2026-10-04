@@ -188,3 +188,7 @@ devices are the real test:
 Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the
 development setup, repository conventions, verification commands, manual
 WebRTC checks, and pull request guidance.
+
+## License
+
+ShareGo is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
